@@ -11,7 +11,8 @@ Reads the API key from ~/.runpod_key and remembers the current pod id in ~/.runp
 import base64, io, json, os, subprocess, sys, tarfile, time
 
 API = "https://api.runpod.io/v2"
-KEYF, PODF = os.path.expanduser("~/.runpod_key"), os.path.expanduser("~/.runpod_pod")
+KEYF = os.path.expanduser("~/.runpod_key")
+PODF = os.path.expanduser("~/.runpod_pod" + os.environ.get("RP_POD", ""))  # RP_POD=2 selects a second pod
 IMAGE = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 PREFER = ["NVIDIA GeForce RTX 4090", "NVIDIA RTX A5000", "NVIDIA GeForce RTX 3090", "NVIDIA RTX A6000",
           "NVIDIA A40", "NVIDIA RTX 4000 Ada Generation", "NVIDIA RTX A4500", "NVIDIA RTX A4000"]
@@ -38,7 +39,10 @@ def pod_id():
 def up(max_price=0.6, name="wsm"):
     code, cat = api("GET", "/catalog/gpus")
     price = {g["id"]: g.get("price") or {} for g in cat["gpus"]}
-    tries = [(price[g].get(t.lower()), t, g) for g in PREFER if g in price for t in ("COMMUNITY", "SECURE")]
+    mem = {g["id"]: g.get("memory", 0) for g in cat["gpus"]}
+    # any NVIDIA card with 16 GB or more; the RTX 50 series is too new for this image's PyTorch build
+    ok = [g for g in price if g.startswith("NVIDIA") and mem[g] >= 16 and "RTX 50" not in g]
+    tries = [(price[g].get(t.lower()), t, g) for g in ok for t in ("COMMUNITY", "SECURE")]
     for p, cloud, gpu in sorted(t for t in tries if t[0] and t[0] <= max_price):
         code, r = api("POST", "/pods", {"name": name, "image": IMAGE, "gpu": {"id": gpu, "count": 1},
                                         "cloud": cloud, "disk": 30})
