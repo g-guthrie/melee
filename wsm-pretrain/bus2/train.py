@@ -62,6 +62,8 @@ def get_args(argv=None):
     p.add_argument("--task_seed", type=int, default=1234)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--out", default="")
+    p.add_argument("--bolt_on", type=int, default=0,
+                   help="N>0: train N steps as a plain transformer, freeze it, then train only the bus wiring")
     return p.parse_args(argv)
 
 
@@ -207,6 +209,7 @@ class Bus(nn.Module):
         self.gate = nn.Linear(d, 1 + NT)
         self.tools = Tools(n)
         self.scale = nn.Parameter(torch.tensor(1.0))
+        self.adapter = None  # set for bolt-on: a trainable linear map from token language to the host's hidden language
 
     def forward(self, h, lit, lit_mask, hard=False, knock=()):
         B, T, D = h.shape
@@ -281,7 +284,8 @@ class Model(nn.Module):
                 bus = self.bus[0 if a.loop else st]
                 reg, info = bus(self._state(outs, li), lit, lit_mask, hard=hard, knock=knock)
                 aux.append(info)
-                outs.append(bus.scale * (reg @ self.tok.weight[: self.n]))
+                w = reg @ self.tok.weight[: self.n]
+                outs.append(bus.scale * (bus.adapter(w) if bus.adapter is not None else w))
         for blk in self.post_layers:
             outs.append(blk(self._state(outs, li)))
             li += 1
@@ -300,12 +304,14 @@ def guide_loss(aux, b):
 
 
 @torch.no_grad()
-def evaluate(model, task, a, gen):
+def evaluate(model, task, a, gen, plain=False):
     model.eval()
     out, N = {}, 2048
     ap = task.arrow_pos
 
     def acc(b, mask, **kw):
+        if plain:
+            kw["no_bus"] = True
         pred = model(b["x"], **kw)[0][:, ap].argmax(-1)
         return ((pred == b["y"]) & mask).sum().item() / max(mask.sum().item(), 1)
 
@@ -320,8 +326,7 @@ def evaluate(model, task, a, gen):
     for d in (1, 2, 3, 4):
         m = last & ((s["depth"] == d) if d < 4 else (s["depth"] >= 4))
         out[f"silent_depth{d}{'plus' if d == 4 else ''}"] = acc(s, m)
-    hid = ~s["shown"]  # every hidden statement in silent programs, by kind (asks the model what it holds internally)
-    if a.tools:
+    if a.tools and not plain:
         logits, aux = model(b["x"])
         info, (gate, p1, p2) = aux[-1], b["labels"][-1]
         out["gate_acc"] = (info["gate"].argmax(-1) == gate).float().mean().item()
@@ -368,10 +373,25 @@ def main(argv=None):
 
     emit({"config": vars(a), "params": sum(p.numel() for p in model.parameters() if p.requires_grad)})
     ap, t0 = task.arrow_pos, time.time()
+    bolted = False
     for step in range(a.steps + 1):
+        if a.bolt_on and step == a.bolt_on:
+            # freeze the plain transformer; from here only the pointers, gates and a write adapter train
+            for p in model.parameters():
+                p.requires_grad_(False)
+            for bus in model.bus:
+                bus.adapter = nn.Linear(a.d, a.d).to(dev)
+                nn.init.eye_(bus.adapter.weight); nn.init.zeros_(bus.adapter.bias)
+                for p in bus.parameters():
+                    p.requires_grad_(True)
+            train_p = [p for p in model.parameters() if p.requires_grad]
+            opt = torch.optim.AdamW(train_p, lr=a.lr, betas=(0.9, 0.98), weight_decay=0.0)
+            bolted = True
+            emit({"bolt_on_at": step, "trainable_params": sum(p.numel() for p in train_p)})
+        plain = bool(a.bolt_on) and not bolted
         if step % a.eval_every == 0:
             rec = {"step": step, "time": round(time.time() - t0, 1)}
-            rec.update(evaluate(model, task, a, egen))
+            rec.update(evaluate(model, task, a, egen, plain=plain))
             if step:
                 rec["loss"], rec["guide_w"] = main_loss.item(), gw
             emit(rec)
@@ -380,17 +400,20 @@ def main(argv=None):
         for grp in opt.param_groups:
             grp["lr"] = a.lr * min(1.0, (step + 1) / a.warmup)
         b = task.batch(a.batch, gen)
-        logits, aux = model(b["x"])
+        logits, aux = model(b["x"], no_bus=plain)
         main_loss = F.cross_entropy(logits[:, ap][b["shown"]], b["y"][b["shown"]])
-        frac, gw = step / a.steps, 0.0
-        if a.tools and a.guide == "full":
+        # guidance fades relative to the phase in which the bus is trained
+        frac, gw = (step - a.bolt_on) / max(a.steps - a.bolt_on, 1), 0.0
+        if plain:
+            pass
+        elif a.tools and a.guide == "full":
             gw = 1.0
         elif a.tools and a.guide == "fade":
             gw = min(1.0, max(0.0, (a.fade_end - frac) / (a.fade_end - a.fade_start)))
         loss = main_loss + (gw * guide_loss(aux, b) if gw > 0 else 0.0)
         opt.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
         opt.step()
     if log:
         log.close()

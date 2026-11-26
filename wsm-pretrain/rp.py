@@ -53,9 +53,17 @@ def up(max_price=0.6, name="wsm"):
             for _ in range(60):  # wait until commands are accepted
                 c, out = api("POST", f"/pods/{r['id']}/exec", {"command": ["true"], "timeoutSeconds": 10})
                 if c == 200:
-                    return r["id"]
+                    c2, chk = api("POST", f"/pods/{r['id']}/exec", {"command": ["python", "-c",
+                                  "import torch;assert torch.cuda.is_available();torch.zeros(1).cuda()"], "timeoutSeconds": 25})
+                    if c2 == 200 and chk.get("exitCode") == 0:
+                        return r["id"]
+                    print("  GPU not usable on this machine; deleting it and trying the next")
+                    api("DELETE", "/pods/" + r["id"])
+                    break
                 time.sleep(5)
-            raise SystemExit("pod never accepted commands")
+            else:
+                api("DELETE", "/pods/" + r["id"])
+            continue
         if code == 202:
             api("DELETE", "/queued-pods/" + r["id"])
     raise SystemExit("no GPU with capacity under the price cap")
