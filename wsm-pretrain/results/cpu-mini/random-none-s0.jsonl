@@ -1,0 +1,12 @@
+{"config": {"arm": "none", "table": "random", "n": 31, "m": 32, "K": 4, "holdout": 0.2, "tool_frac": 0.5, "d": 64, "layers": 4, "heads": 4, "tool_layer": 3, "writer": "tied", "aux_weight": 1.0, "steps": 8000, "batch": 256, "lr": 0.001, "wd": 0.01, "warmup": 500, "eval_every": 500, "seed": 0, "task_seed": 1234, "device": "cpu", "threads": 1, "out": "results/cpu-mini/random-none-s0.jsonl"}, "params": 205376}
+{"step": 0, "time": 0.0, "tool_train": 0.0, "tool_heldout": 0.0, "filler": 0.0}
+{"step": 500, "time": 56.4, "tool_train": 0.06884765625, "tool_heldout": 0.025390625, "filler": 0.1533203125, "loss": 3.1402103900909424}
+{"step": 1000, "time": 113.1, "tool_train": 0.095947265625, "tool_heldout": 0.02001953125, "filler": 0.8603515625, "loss": 1.9418808221817017}
+{"step": 1500, "time": 171.1, "tool_train": 0.12060546875, "tool_heldout": 0.031005859375, "filler": 0.96875, "loss": 1.613446831703186}
+{"step": 2000, "time": 228.1, "tool_train": 0.11181640625, "tool_heldout": 0.0234375, "filler": 0.984375, "loss": 1.603101372718811}
+{"step": 2500, "time": 284.2, "tool_train": 0.14453125, "tool_heldout": 0.025146484375, "filler": 0.9912109375, "loss": 1.5166970491409302}
+{"step": 3000, "time": 338.3, "tool_train": 0.156005859375, "tool_heldout": 0.025146484375, "filler": 0.98828125, "loss": 1.5126115083694458}
+{"step": 3500, "time": 392.5, "tool_train": 0.16455078125, "tool_heldout": 0.03173828125, "filler": 0.984375, "loss": 1.3832459449768066}
+{"step": 4000, "time": 445.0, "tool_train": 0.1669921875, "tool_heldout": 0.02490234375, "filler": 0.9921875, "loss": 1.3436199426651}
+{"step": 4500, "time": 499.2, "tool_train": 0.180419921875, "tool_heldout": 0.029541015625, "filler": 0.998046875, "loss": 1.2423300743103027}
+{"step": 5000, "time": 554.8, "tool_train": 0.18603515625, "tool_heldout": 0.02490234375, "filler": 0.9970703125, "loss": 1.3129220008850098}
