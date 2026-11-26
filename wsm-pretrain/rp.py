@@ -43,7 +43,8 @@ def up(max_price=0.6, name="wsm"):
     # any NVIDIA card with 16 GB or more; the RTX 50 series is too new for this image's PyTorch build
     ok = [g for g in price if g.startswith("NVIDIA") and mem[g] >= 16 and "RTX 50" not in g]
     tries = [(price[g].get(t.lower()), t, g) for g in ok for t in ("COMMUNITY", "SECURE")]
-    for p, cloud, gpu in sorted(t for t in tries if t[0] and t[0] <= max_price):
+    rank = lambda g: PREFER.index(g) if g in PREFER else len(PREFER)   # preferred (faster) cards first, then by price
+    for p, cloud, gpu in sorted((t for t in tries if t[0] and t[0] <= max_price), key=lambda t: (rank(t[2]), t[0])):
         code, r = api("POST", "/pods", {"name": name, "image": IMAGE, "gpu": {"id": gpu, "count": 1},
                                         "cloud": cloud, "disk": 30})
         if code == 201:
