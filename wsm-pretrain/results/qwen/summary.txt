@@ -1,0 +1,47 @@
+RESULT Qwen/Qwen3-0.6B-Base mode=plain split=hard: 340/1319 = 25.78% | 1375s
+RESULT Qwen/Qwen3-0.6B-Base mode=calc split=hard: 449/1319 = 34.04% | 1920s
+RESULT Qwen/Qwen3-0.6B-Base mode=plain split=test: 691/1319 = 52.39% | 3683s
+RESULT Qwen/Qwen3-0.6B-Base mode=calc split=test: 704/1319 = 53.37% | 2837s
+RESULT bus reader=L12_r0.pt split=hard: 388/1319 = 29.42% | {"fires": 2602, "writes": 2564, "parse_fail": 23, "range_fail": 15} | 2653s
+RESULT bus reader=L12_r0.pt split=test: 662/1319 = 50.19% | {"fires": 2678, "writes": 2654, "parse_fail": 23, "range_fail": 1} | 1494s
+DATA_DONE sequences 5000 calls 12653 of which chained 1595 lost_to_truncation 96 enlarged 2500
+READER {"calls": 782, "gate_recall": 0.9949, "gate_precision": 0.9886, "ptr1_acc": 1.0, "ptr2_acc": 0.9987, "call_fully_right": 0.9936, "false_fires_per_1k_tokens": 0.3042, "layer": 12, "reader_layers": 0, "params": 580613, "n_train": 4700, "steps": 4000, "seconds": 130}
+READER {"calls": 782, "gate_recall": 0.9949, "gate_precision": 0.9898, "ptr1_acc": 0.9987, "ptr2_acc": 1.0, "call_fully_right": 0.9936, "false_fires_per_1k_tokens": 0.2704, "layer": 6, "reader_layers": 0, "params": 580613, "n_train": 4700, "steps": 4000, "seconds": 130}
+RESULT bus reader=X12_r0.pt split=hard: 462/1319 = 35.03% | {"fires": 3125, "writes": 3052, "parse_fail": 51, "range_fail": 22, "chained": 414} | 1199s
+RESULT bus reader=X12_r0.pt split=test: 714/1319 = 54.13% | {"fires": 3078, "writes": 3019, "parse_fail": 57, "range_fail": 2, "chained": 428} | 1049s
+READER {"calls": 662, "gate_recall": 0.994, "gate_precision": 0.9821, "ptr1_acc": 0.9985, "ptr2_acc": 1.0, "call_fully_right": 0.994, "false_fires_per_1k_tokens": 0.4001, "layer": 12, "reader_layers": 0, "params": 580613, "n_train": 2500, "steps": 3000, "seconds": 190}
+READER {"calls": 662, "gate_recall": 0.9864, "gate_precision": 0.9805, "ptr1_acc": 0.9985, "ptr2_acc": 0.9985, "call_fully_right": 0.9849, "false_fires_per_1k_tokens": 0.4001, "layer": 12, "reader_layers": 2, "params": 2160133, "n_train": 2500, "steps": 3000, "seconds": 543}
+READER {"calls": 662, "gate_recall": 0.997, "gate_precision": 0.9821, "ptr1_acc": 0.9955, "ptr2_acc": 0.994, "call_fully_right": 0.9864, "false_fires_per_1k_tokens": 0.4001, "layer": 6, "reader_layers": 0, "params": 580613, "n_train": 2500, "steps": 3000, "seconds": 270}
+READER {"calls": 662, "gate_recall": 0.9834, "gate_precision": 0.9819, "ptr1_acc": 0.997, "ptr2_acc": 1.0, "call_fully_right": 0.9804, "false_fires_per_1k_tokens": 0.3334, "layer": 6, "reader_layers": 2, "params": 2160133, "n_train": 2500, "steps": 3000, "seconds": 314}
+READER {"calls": 662, "gate_recall": 0.994, "gate_precision": 0.9719, "ptr1_acc": 0.997, "ptr2_acc": 0.9985, "call_fully_right": 0.9909, "false_fires_per_1k_tokens": 0.6335, "layer": 18, "reader_layers": 0, "params": 580613, "n_train": 2500, "steps": 3000, "seconds": 156}
+READER {"calls": 662, "gate_recall": 0.9909, "gate_precision": 0.9791, "ptr1_acc": 0.997, "ptr2_acc": 1.0, "call_fully_right": 0.9894, "false_fires_per_1k_tokens": 0.4334, "layer": 18, "reader_layers": 2, "params": 2160133, "n_train": 2500, "steps": 3000, "seconds": 322}
+READER {"calls": 662, "gate_recall": 0.9743, "gate_precision": 0.9641, "ptr1_acc": 0.9879, "ptr2_acc": 0.9985, "call_fully_right": 0.9637, "false_fires_per_1k_tokens": 0.7335, "layer": 24, "reader_layers": 0, "params": 580613, "n_train": 2500, "steps": 3000, "seconds": 157}
+READER {"calls": 662, "gate_recall": 0.9728, "gate_precision": 0.9598, "ptr1_acc": 0.997, "ptr2_acc": 0.9985, "call_fully_right": 0.9713, "false_fires_per_1k_tokens": 0.7668, "layer": 24, "reader_layers": 2, "params": 2160133, "n_train": 2500, "steps": 3000, "seconds": 318}
+READERS_DONE
+== audit
+out/hard_plain.json
+   ALL                    right  2238  wrong   609  -> 78.6% correct
+out/hard_calc.json
+   ALL                    right  2767  wrong    69  -> 97.6% correct
+out/hard_bus_L12_r0.json
+   ALL                    right  2702  wrong   130  -> 95.4% correct
+out/hard_bus_X12.json
+   ALL                    right  2728  wrong   101  -> 96.4% correct
+out/test_plain.json
+   ALL                    right  2580  wrong   136  -> 95.0% correct
+out/test_calc.json
+   ALL                    right  2626  wrong    57  -> 97.9% correct
+out/test_bus_X12.json
+   ALL                    right  2627  wrong    82  -> 97.0% correct
+== gap test
+out/test_calc.json right, out/test_bus_X12.json wrong: 15
+     7  arithmetic all right; different reasoning or final copy
+     6  has a chained expression (a op b op c =)
+     2  has a bracketed expression
+out/test_bus_X12.json right, out/test_calc.json wrong: 25
+    15  has a chained expression (a op b op c =)
+    10  arithmetic all right; different reasoning or final copy
+out/test_plain.json right, out/test_bus_X12.json wrong: 7
+     4  arithmetic all right; different reasoning or final copy
+     3  has a chained expression (a op b op c =)
+[exit 0 timedOut False]
