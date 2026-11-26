@@ -2,10 +2,10 @@
 
 A small causal transformer is trained from random init on a mix of two tasks:
 
-  tool task   n1 v1 n2 v2 ... nK vK Q ni nj =  ->  f(v_i, v_j)
-              (bind K names to values, then apply a binary function f to two of them)
-  lookup task n1 v1 ... nK vK L1 ni nj =       ->  v_i      (L2 -> v_j)
-              (plain retrieval; teaches name->value binding, says nothing about f)
+  tool task   v1 v2 ... vK Q si sj =           ->  f(v_i, v_j)
+              (K value slots, then apply a binary function f to the two named slots)
+  lookup task v1 v2 ... vK L1 si sj =          ->  v_i      (L2 -> v_j)
+              (plain retrieval; teaches slot lookup, says nothing about f)
   filler task PAD ... F u w =                  ->  g(u, w)
               (a table of random facts that must be memorised; competes for capacity)
 
@@ -41,7 +41,7 @@ def get_args(argv=None):
     p.add_argument("--d", type=int, default=128)
     p.add_argument("--layers", type=int, default=4)
     p.add_argument("--heads", type=int, default=4)
-    p.add_argument("--tool_layer", type=int, default=3, help="tool runs after this many blocks")
+    p.add_argument("--tool_layer", type=int, default=2, help="tool runs after this many blocks")
     p.add_argument("--writer", default="tied", choices=["tied", "learned"])
     p.add_argument("--aux_weight", type=float, default=1.0)
     p.add_argument("--steps", type=int, default=20000)
@@ -59,7 +59,7 @@ def get_args(argv=None):
 
 
 class Task:
-    """Token layout: [0,n) values | n..n+K names | then m filler symbols | Q, EQ, F, PAD, L1, L2."""
+    """Token layout: [0,n) values | n..n+K slot names | then m filler symbols | Q, EQ, F, PAD, L1, L2."""
 
     def __init__(self, a, device):
         g = torch.Generator().manual_seed(a.task_seed)
@@ -81,32 +81,30 @@ class Task:
         self.SYM0 = n + K
         self.Q, self.EQ, self.F, self.PAD, self.L1, self.L2 = (n + K + m + i for i in range(6))
         self.vocab = n + K + m + 6
-        self.seq_len = 2 * K + 4
+        self.seq_len = K + 4
         self.device = device
 
     def tool_batch(self, B, pairs, gen):
         dev, K, n = self.device, self.K, self.n
         idx = pairs[torch.randint(len(pairs), (B,), generator=gen, device=dev)]
         av, bv = idx // n, idx % n
-        names = torch.argsort(torch.rand(B, K, generator=gen, device=dev), dim=1)
         vals = torch.randint(n, (B, K), generator=gen, device=dev)
         i = torch.randint(K, (B,), generator=gen, device=dev)
         j = (i + torch.randint(1, K, (B,), generator=gen, device=dev)) % K
         rows = torch.arange(B, device=dev)
         vals[rows, i] = av
         vals[rows, j] = bv
-        ctx = torch.stack([names + self.NAME0, vals], dim=2).reshape(B, 2 * K)
         q = torch.full((B,), self.Q, device=dev)
         eq = torch.full((B,), self.EQ, device=dev)
-        x = torch.cat([ctx, q[:, None], (names[rows, i] + self.NAME0)[:, None],
-                       (names[rows, j] + self.NAME0)[:, None], eq[:, None]], dim=1)
+        x = torch.cat([vals, q[:, None], (i + self.NAME0)[:, None],
+                       (j + self.NAME0)[:, None], eq[:, None]], dim=1)
         return x, self.f[av, bv], av, bv
 
     def lookup_batch(self, B, gen):
         """Same context and query names as the tool task, but the answer is one of the two values."""
         x, _, av, bv = self.tool_batch(B, self.all_pairs, gen)
         first = torch.rand(B, generator=gen, device=self.device) < 0.5
-        x[:, 2 * self.K] = torch.where(first, self.L1, self.L2)
+        x[:, self.K] = torch.where(first, self.L1, self.L2)
         return x, torch.where(first, av, bv)
 
     def filler_batch(self, B, gen, all_pairs=False):

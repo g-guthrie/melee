@@ -1,2 +1,0 @@
-{"config": {"arm": "none", "table": "random", "n": 31, "m": 32, "K": 4, "holdout": 0.2, "tool_frac": 0.4, "lookup_frac": 0.2, "d": 64, "layers": 4, "heads": 4, "tool_layer": 3, "writer": "tied", "aux_weight": 1.0, "steps": 10000, "batch": 256, "lr": 0.001, "wd": 0.01, "warmup": 500, "eval_every": 500, "seed": 0, "task_seed": 1234, "device": "cpu", "threads": 1, "out": "results/cpu-mini2/random-none-s0.jsonl"}, "params": 205504}
-{"step": 0, "time": 0.0, "tool_train": 0.0, "tool_heldout": 0.0, "lookup": 0.0, "filler": 0.0}
