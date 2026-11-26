@@ -11,7 +11,7 @@ such as a space or ' $' is left to the host first).  The host's weights are neve
 import argparse, json, os, re, time
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from common import Reader, OPS, build_prompt, calc_ref, number_before
+from common import Reader, build_prompt, number_span_before, clean_expr, eval_expr
 
 ap = argparse.ArgumentParser()
 ap.add_argument("out")
@@ -89,13 +89,16 @@ def generate(seqs):
             if done[i] or g[i] == 0 or queue[i] or lead[i]:
                 continue
             stats["fires"] += 1
-            # pointer targets are the tokens just after each operand
-            A, Bn = number_before(strs[i], tgt[i][0]), number_before(strs[i], tgt[i][1])
-            if not A or not Bn:
+            # pointer 1 targets the token just after the expression's first number; the expression runs from that
+            # number to the '=' just fed, and is read exactly from the token text
+            start = number_span_before(strs[i], tgt[i][0])
+            expr = clean_expr("".join(strs[i][start:t])) if start >= 0 else ""
+            if not expr:
                 stats["parse_fail"] += 1; continue
-            res = calc_ref(f"{A}{OPS[g[i] - 1]}{Bn}")
+            res = eval_expr(expr)
             if res == "":
                 stats["range_fail"] += 1; continue
+            stats["chained"] = stats.get("chained", 0) + (sum(expr.count(c) for c in "+-*/") > 1)
             queue[i] = [CH[c] for c in res]; lead[i] = True; stats["writes"] += 1
     return gen
 

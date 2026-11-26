@@ -15,13 +15,61 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 sys.path.insert(0, os.getcwd())
-from micromachines.calcfmt import calc_ref, strip_solution  # noqa: E402
+from micromachines.calcfmt import calc_ref, strip_solution, _chain, Fail  # noqa: E402
 
 OPS = ["+", "-", "*", "/"]                    # gate classes 1..4 (0 = no call)
 OPCHAR = {"+": "+", "-": "-", "*": "*", "/": "/", "x": "*", "×": "*"}
 # "A op B =" where A is not itself the tail of a longer expression
 EXPR = re.compile(r"(?<![\d.,])(\d[\d,]*(?:\.\d+)?)(\s*)([+\-*/x×])(\s*\$?)(\d[\d,]*(?:\.\d+)?)\s*=")
 NUMCH = set("0123456789.,")
+# a whole expression: two or more numbers joined by operators, ending in '=' (no brackets)
+_N = r"\d[\d,]*(?:\.\d+)?"
+EXPRN = re.compile(r"(?<![\d.,])(" + _N + r")((?:\s*[+\-*/x×]\s*\$?" + _N + r")+)\s*=")
+CLEAN = re.compile(r"^\d+(\.\d+)?([+\-*/]\d+(\.\d+)?)+$")
+
+
+def clean_expr(text):
+    """'3 * $4,748,457 - $20' -> '3*4748457-20' ('' if it is not a plain bracket-free expression)."""
+    e = text.replace("$", "").replace(",", "").replace(" ", "").replace("x", "*").replace("×", "*")
+    return e if CLEAN.match(e) else ""
+
+
+def eval_expr(expr):
+    """Exact value of a cleaned expression, with the paper's calculator semantics applied step by step
+    (usual precedence; each division truncated to 6 decimals). '' if it cannot be evaluated."""
+    try:
+        return _chain(expr)[1]
+    except Fail:
+        return ""
+
+
+def find_exprs(text):
+    """Whole expressions in a text: (char index of '=', char index of the first operator, cleaned expression)."""
+    out = []
+    for m in EXPRN.finditer(text):
+        before = text[: m.start(1)].rstrip()
+        if before and before[-1] in "+-*/x×(":      # the tail of something longer or bracketed: leave it alone
+            continue
+        e = clean_expr(text[m.start(1): m.end() - 1])
+        if not e or eval_expr(e) == "":
+            continue
+        op_c = m.start(2) + len(m.group(2)) - len(m.group(2).lstrip())
+        out.append((m.end() - 1, op_c, e))
+    return out
+
+
+def number_span_before(strs, j):
+    """Index of the first token of the number that ends in token j-1, or -1."""
+    i = j - 1
+    while i >= 0:
+        t = strs[i].strip()
+        if t and all(c in NUMCH for c in t):
+            i -= 1
+        elif t.startswith("$") and len(t) > 1 and all(c in NUMCH for c in t[1:]):
+            i -= 1; break
+        else:
+            break
+    return i + 1 if i + 1 <= j - 1 else -1
 
 
 def build_prompt(tok, shots_path="data/gsm8k/shots_v1.json"):

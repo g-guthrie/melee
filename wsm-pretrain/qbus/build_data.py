@@ -12,13 +12,13 @@ import argparse, json, os, random, re
 import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from common import OPS, build_prompt, find_calls, calc_ref, strip_solution, EXPR, OPCHAR
+from common import build_prompt, find_exprs, strip_solution, EXPRN, clean_expr, eval_expr, _N
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", default="Qwen/Qwen3-0.6B-Base")
 ap.add_argument("--n", type=int, default=2800)
 ap.add_argument("--max_len", type=int, default=200)
-ap.add_argument("--layers", default="6,12,18,24")
+ap.add_argument("--layers", default="6,12")
 ap.add_argument("--bs", type=int, default=8)
 ap.add_argument("--out", default="/workspace/qdata")
 ap.add_argument("--seed", type=int, default=0)
@@ -40,15 +40,22 @@ def rand_num():
 
 
 def enlarge(text):
-    """Replace each call's operands by random numbers and its written result by the true result."""
+    """Replace the numbers of each expression by random ones (one or two of them large) and its written result
+    by the true result."""
     out, last = [], 0
-    for m in EXPR.finditer(text):
-        a_, b_ = rand_num(), rand_num()
-        op = OPCHAR[m.group(3)]
-        res = calc_ref(f"{a_}{op}{b_}")
+    for m in EXPRN.finditer(text):
+        span = text[m.start(1): m.end() - 1]
+        nums = list(re.finditer(_N, span))
+        big = set(rng.sample(range(len(nums)), k=min(len(nums), rng.choice([1, 1, 2]))))
+        new, p = [], 0
+        for k, nm in enumerate(nums):
+            new.append(span[p:nm.start()] + (rand_num() if k in big else (nm.group(0) if rng.random() < 0.5 else str(rng.randint(1, 99)))))
+            p = nm.end()
+        new = "".join(new) + span[p:]
+        res = eval_expr(clean_expr(new))
         if res == "":
             continue
-        out.append(text[last:m.start(1)] + a_ + m.group(2) + m.group(3) + m.group(4) + b_ + text[m.end(5):m.end()])
+        out.append(text[last:m.start(1)] + new + text[m.start(1) + len(span): m.end()])
         last = m.end()
         tail = re.match(r"(\s*\$?)(-?\d[\d,]*(?:\.\d+)?)", text[last:])
         if tail:
@@ -65,7 +72,7 @@ N, L = len(rows), a.max_len
 H = np.lib.format.open_memmap(f"{a.out}/h.npy", mode="w+", dtype=np.float16, shape=(N, len(layers), L, model.config.hidden_size))
 gate, p1, p2 = np.zeros((N, L), np.int64), np.full((N, L), -1, np.int64), np.full((N, L), -1, np.int64)
 length = np.zeros(N, np.int64)
-meta, n_calls, n_lost = [], 0, 0
+meta, n_calls, n_lost, n_chain = [], 0, 0, 0
 seqs = []
 for i, r in enumerate(rows):
     body, fin = strip_solution(r["answer"])
@@ -78,13 +85,14 @@ for i, r in enumerate(rows):
     for t, (s, e) in enumerate(offs):
         for c in range(s, e):
             char2tok[c] = t
-    for eq_c, op_c, op, a_, b_ in find_calls(text):
+    for eq_c, op_c, expr in find_exprs(text):
         if eq_c not in char2tok or op_c not in char2tok:
             n_lost += 1
             continue
         te, to = char2tok[eq_c], char2tok[op_c]
-        gate[i, te], p1[i, te], p2[i, te] = 1 + OPS.index(op), to, te
+        gate[i, te], p1[i, te], p2[i, te] = 1, to, te      # one gate class: evaluate the expression that ends here
         n_calls += 1
+        n_chain += expr.count("+") + expr.count("-") + expr.count("*") + expr.count("/") > 1
     length[i] = len(ids)
     q_ids = tok(f"Question: {r['question']}\nAnswer:", add_special_tokens=False)["input_ids"]
     seqs.append(prompt + q_ids + ids)
@@ -108,4 +116,4 @@ with torch.no_grad():
 H.flush()
 np.savez(f"{a.out}/labels.npz", gate=gate, p1=p1, p2=p2, length=length, layers=np.array(layers))
 json.dump(meta, open(f"{a.out}/meta.json", "w"))
-print(f"DATA_DONE sequences {N} calls {n_calls} lost_to_truncation {n_lost} enlarged {N // 2}")
+print(f"DATA_DONE sequences {N} calls {n_calls} of which chained {n_chain} lost_to_truncation {n_lost} enlarged {N // 2}")
