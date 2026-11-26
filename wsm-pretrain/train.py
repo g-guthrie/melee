@@ -4,6 +4,8 @@ A small causal transformer is trained from random init on a mix of two tasks:
 
   tool task   n1 v1 n2 v2 ... nK vK Q ni nj =  ->  f(v_i, v_j)
               (bind K names to values, then apply a binary function f to two of them)
+  lookup task n1 v1 ... nK vK L1 ni nj =       ->  v_i      (L2 -> v_j)
+              (plain retrieval; teaches name->value binding, says nothing about f)
   filler task PAD ... F u w =                  ->  g(u, w)
               (a table of random facts that must be memorised; competes for capacity)
 
@@ -34,7 +36,8 @@ def get_args(argv=None):
     p.add_argument("--m", type=int, default=64, help="filler symbols; filler table has m*m facts")
     p.add_argument("--K", type=int, default=4, help="variables bound in the context")
     p.add_argument("--holdout", type=float, default=0.2, help="fraction of (a,b) pairs never trained")
-    p.add_argument("--tool_frac", type=float, default=0.5, help="fraction of examples that are the tool task")
+    p.add_argument("--tool_frac", type=float, default=0.4, help="fraction of examples that are the tool task")
+    p.add_argument("--lookup_frac", type=float, default=0.2, help="fraction that are plain retrieval")
     p.add_argument("--d", type=int, default=128)
     p.add_argument("--layers", type=int, default=4)
     p.add_argument("--heads", type=int, default=4)
@@ -56,7 +59,7 @@ def get_args(argv=None):
 
 
 class Task:
-    """Token layout: [0,n) values | n..n+K names | then m filler symbols | Q, EQ, F, PAD."""
+    """Token layout: [0,n) values | n..n+K names | then m filler symbols | Q, EQ, F, PAD, L1, L2."""
 
     def __init__(self, a, device):
         g = torch.Generator().manual_seed(a.task_seed)
@@ -73,10 +76,11 @@ class Task:
         n_test = int(a.holdout * n * n)
         self.test_pairs = perm[:n_test].to(device)
         self.train_pairs = perm[n_test:].to(device)
+        self.all_pairs = perm.to(device)
         self.NAME0 = n
         self.SYM0 = n + K
-        self.Q, self.EQ, self.F, self.PAD = (n + K + m + i for i in range(4))
-        self.vocab = n + K + m + 4
+        self.Q, self.EQ, self.F, self.PAD, self.L1, self.L2 = (n + K + m + i for i in range(6))
+        self.vocab = n + K + m + 6
         self.seq_len = 2 * K + 4
         self.device = device
 
@@ -98,6 +102,13 @@ class Task:
                        (names[rows, j] + self.NAME0)[:, None], eq[:, None]], dim=1)
         return x, self.f[av, bv], av, bv
 
+    def lookup_batch(self, B, gen):
+        """Same context and query names as the tool task, but the answer is one of the two values."""
+        x, _, av, bv = self.tool_batch(B, self.all_pairs, gen)
+        first = torch.rand(B, generator=gen, device=self.device) < 0.5
+        x[:, 2 * self.K] = torch.where(first, self.L1, self.L2)
+        return x, torch.where(first, av, bv)
+
     def filler_batch(self, B, gen, all_pairs=False):
         dev, m = self.device, self.m
         if all_pairs:
@@ -117,9 +128,12 @@ class Task:
     def train_batch(self, B, gen):
         xt, yt, av, bv = self.tool_batch(B, self.train_pairs, gen)
         xf, yf = self.filler_batch(B, gen)
-        is_tool = torch.rand(B, generator=gen, device=self.device) < self.a.tool_frac
-        x = torch.where(is_tool[:, None], xt, xf)
-        y = torch.where(is_tool, yt, yf)
+        xl, yl = self.lookup_batch(B, gen)
+        r = torch.rand(B, generator=gen, device=self.device)
+        is_tool = r < self.a.tool_frac
+        is_look = (~is_tool) & (r < self.a.tool_frac + self.a.lookup_frac)
+        x = torch.where(is_tool[:, None], xt, torch.where(is_look[:, None], xl, xf))
+        y = torch.where(is_tool, yt, torch.where(is_look, yl, yf))
         return x, y, is_tool, av, bv
 
 
@@ -224,6 +238,8 @@ def evaluate(model, task, a, gen):
             out[f"gate_tool_{split}"] = aux["gate"].mean().item()
             out[f"tool_{split}_ablated"] = (model(x, ablate=True)[0].argmax(-1) == y).float().mean().item()
             out[f"tool_{split}_hard"] = (model(x, hard=True, oracle=orc)[0].argmax(-1) == y).float().mean().item()
+    x, y = task.lookup_batch(N, gen)
+    out["lookup"] = (model(x)[0].argmax(-1) == y).float().mean().item()
     x, y = task.filler_batch(0, gen, all_pairs=True)
     logits, aux = model(x)
     out["filler"] = (logits.argmax(-1) == y).float().mean().item()
