@@ -58,6 +58,7 @@ def get_args(argv=None):
     p.add_argument("--task_seed", type=int, default=1234)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--out", default="")
+    p.add_argument("--wiring", type=int, default=0, help="1: after training, report where pointers point and which tools fire")
     return p.parse_args(argv)
 
 
@@ -313,6 +314,46 @@ def evaluate(model, task, a, gen):
     return out
 
 
+@torch.no_grad()
+def wiring_report(model, task, gen):
+    """Describe the routing the model actually uses, by position within a statement."""
+    model.eval()
+    N, S = 4096, task.S
+    b = task.batch(N, gen, train=False)
+    info = model(b["x"])[1][-1]
+    gate = info["gate"].softmax(-1)                       # (N, T, 5)
+    tgt = info["ptr"].argmax(-1)                          # (N, 2, T)
+    rep = {"gate_by_slot": {}, "arrow": {}, "operand": {}}
+    names = ["none"] + Tools.NAMES
+    slot = torch.arange(task.T, device=gate.device) % SLOT
+    for sl in range(SLOT):
+        g = gate[:, slot == sl].mean((0, 1))
+        rep["gate_by_slot"][str(sl)] = {n: round(float(v), 3) for n, v in zip(names, g)}
+    base = torch.arange(1, S, device=gate.device) * SLOT   # skip the first statement (nothing earlier to use)
+    for h, off in ((0, 2), (1, 4)):
+        t = tgt[:, h][:, base + 5]                         # where the arrow's pointer h lands
+        direct = b["p1"][:, base + off]                    # where that operand's value was computed, if it is a name
+        is_var = direct >= 0
+        binary = b["ops"][:, 1:] > 0
+        m = is_var & (binary if h == 1 else torch.ones_like(binary))
+        cats = {"operand_position_as_designed": t == (base + off), "straight_to_where_it_was_computed": t == direct,
+                "the_printed_result_token": t == direct + 1}
+        other = m.clone()
+        for k, v in cats.items():
+            rep["arrow"][f"ptr{h + 1}_{k}"] = round(float((v & m).sum() / m.sum().clamp(min=1)), 3)
+            other &= ~v
+        rep["arrow"][f"ptr{h + 1}_elsewhere"] = round(float(other.sum() / m.sum().clamp(min=1)), 3)
+        lit = ~is_var & (binary if h == 1 else torch.ones_like(binary))
+        rep["arrow"][f"ptr{h + 1}_literal_operand_hit"] = round(float(((t == (base + off)) & lit).sum() / lit.sum().clamp(min=1)), 3)
+        # does the operand position itself fetch the value (the designed copy step)?
+        g_op = gate[:, base + off][..., 1]
+        rep["operand"][f"slot{off}_copy_gate_when_name"] = round(float(g_op[is_var].mean()), 3)
+        t_op = tgt[:, 0][:, base + off]
+        rep["operand"][f"slot{off}_points_to_source"] = round(float(((t_op == direct) & is_var).sum() / is_var.sum().clamp(min=1)), 3)
+    model.train()
+    return rep
+
+
 def main(argv=None):
     a = get_args(argv)
     torch.manual_seed(a.seed)
@@ -361,6 +402,8 @@ def main(argv=None):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
+    if a.wiring and a.tools:
+        emit({"wiring": wiring_report(model, task, egen)})
     if log:
         log.close()
 
