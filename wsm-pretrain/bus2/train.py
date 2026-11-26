@@ -62,6 +62,9 @@ def get_args(argv=None):
     p.add_argument("--task_seed", type=int, default=1234)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--out", default="")
+    p.add_argument("--reader", type=int, default=0,
+                   help="bolt-on only: give the bus this many attention layers of its own to prepare pointers and gates")
+    p.add_argument("--wiring", type=int, default=0, help="1: after training, report which tools fire where")
     p.add_argument("--bolt_on", type=int, default=0,
                    help="N>0: train N steps as a plain transformer, freeze it, then train only the bus wiring")
     return p.parse_args(argv)
@@ -210,9 +213,13 @@ class Bus(nn.Module):
         self.tools = Tools(n)
         self.scale = nn.Parameter(torch.tensor(1.0))
         self.adapter = None  # set for bolt-on: a trainable linear map from token language to the host's hidden language
+        self.reader = None   # set for bolt-on: the bus's own attention layers; they never write into the host
 
     def forward(self, h, lit, lit_mask, hard=False, knock=()):
         B, T, D = h.shape
+        if self.reader is not None:
+            for blk in self.reader:
+                h = h + blk(h)
         z = self.ln(h)
         q, k = self.q(z).view(B, T, 2, D), self.k(z).view(B, T, 2, D)
         ptr = torch.einsum("bthd,bshd->bhts", q, k) / math.sqrt(D)
@@ -350,6 +357,47 @@ def evaluate(model, task, a, gen, plain=False):
     return out
 
 
+@torch.no_grad()
+def wiring_report(model, task, gen):
+    """Which tool fires at each position of a statement, and how branch statements are routed."""
+    model.eval()
+    N, S = 4096, task.S
+    b = task.batch(N, gen, train=False)
+    info = model(b["x"])[1][-1]
+    gate = info["gate"].softmax(-1)
+    tgt = info["ptr"].argmax(-1)
+    names = ["none"] + TOOLS
+    rnd = lambda v: {n: round(float(x), 3) for n, x in zip(names, v) if float(x) >= 0.02}
+    rep = {"gate_by_slot": {}, "arrow_gate_by_statement_kind": {}, "branch_arrow_pointers": {}}
+    pos = torch.arange(task.T, device=gate.device)
+    for sl in range(SLOT):
+        rep["gate_by_slot"][str(sl)] = rnd(gate[:, (pos >= 1) & ((pos - 1) % SLOT == sl)].mean((0, 1)))
+    ap = task.arrow_pos
+    g_arrow = gate[:, ap]                                   # (N, S, 1+NT)
+    for i, name in enumerate(OPS):
+        m = b["ops"] == i
+        if m.any():
+            rep["arrow_gate_by_statement_kind"][name] = rnd(g_arrow[m].mean(0))
+    m = b["ops"] == SEL
+    if m.any():
+        base = (ap - 5).unsqueeze(0).expand(N, S)[m]
+        for h in (0, 1):
+            t = tgt[:, h][:, ap][m]
+            cats = {"first_choice_operand": t == base + 2, "second_choice_operand": t == base + 4,
+                    "the_comparison_result": t == base - SLOT + 5, "the_comparison_shown_token": t == base - SLOT + 6,
+                    "operator_token": t == base + 3}
+            other = torch.ones_like(t, dtype=torch.bool)
+            for k, v in cats.items():
+                rep["branch_arrow_pointers"][f"ptr{h + 1}_{k}"] = round(float(v.float().mean()), 3)
+                other &= ~v
+            rep["branch_arrow_pointers"][f"ptr{h + 1}_elsewhere"] = round(float(other.float().mean()), 3)
+        for off, nm in ((2, "first_choice"), (3, "operator"), (4, "second_choice")):
+            rows = torch.arange(N, device=gate.device).unsqueeze(1).expand(N, S)[m]
+            rep[f"branch_{nm}_position_gate"] = rnd(gate[rows, base + off].mean(0))
+    model.train()
+    return rep
+
+
 def main(argv=None):
     a = get_args(argv)
     torch.manual_seed(a.seed)
@@ -382,6 +430,9 @@ def main(argv=None):
             for bus in model.bus:
                 bus.adapter = nn.Linear(a.d, a.d).to(dev)
                 nn.init.eye_(bus.adapter.weight); nn.init.zeros_(bus.adapter.bias)
+                if a.reader:
+                    bus.reader = nn.ModuleList([Block(a.d, a.heads) for _ in range(a.reader)]).to(dev)
+                    bus.reader.apply(Model._init)
                 for p in bus.parameters():
                     p.requires_grad_(True)
             train_p = [p for p in model.parameters() if p.requires_grad]
@@ -415,6 +466,8 @@ def main(argv=None):
         loss.backward()
         torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
         opt.step()
+    if a.wiring and a.tools:
+        emit({"wiring": wiring_report(model, task, egen)})
     if log:
         log.close()
 
